@@ -34,7 +34,6 @@ cv::Point2d cartesian_to_opencv(const cv::Point2d& point, int width, int height)
 void move_target(cv::Point2d& cartesian_target, double theta){
     cartesian_target.x = cartesian_target.x + std::cos(theta);
     cartesian_target.y = cartesian_target.y + std::sin(theta);
-    std::cout << cartesian_target.x << "; " << cartesian_target.y << std::endl;
 }
 
 double bearing_angle(const double phi, const double theta){
@@ -43,6 +42,18 @@ double bearing_angle(const double phi, const double theta){
 
     int n = 180 - (phi_g + theta_g);
     return to_radians(n);
+}
+
+cv::Point2d build_vector(const double velocity, const double theta){
+    return cv::Point2d(velocity * std::sin(theta), velocity * std::cos(theta));
+}
+
+double vector_dot(const cv::Point2d& v1, const cv::Point& v2){
+    return v1.x * v2.x + v1.y * v2.y;
+}
+
+double vector_module(const cv::Point2d& v){
+    return std::sqrt(v.x * v.x + v.y * v.y);
 }
 
 int main(){
@@ -68,6 +79,16 @@ int main(){
     double r_ref = 30;
     double K = 1.0;
 
+    std::vector<cv::Point2d> wind{cv::Point2d(2.0, 1.0), 
+                                  cv::Point2d(4.0, 1.0),
+                                  cv::Point2d(1.5, 7.0),
+                                  cv::Point2d(-3.0, -1.2),
+                                  cv::Point2d(-4.0, 2.3),
+                                  cv::Point2d(3.0, -2.5)};
+    int wind_counter = 0;
+    cv::Point2d wind_vec;
+    cv::Point2d wind_anchor(-450, 250);
+
     cv::VideoWriter video("output.avi", cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), 10, cv::Size(img_width, img_height));
     for(int i = 0; i < 600; ++i){
         move_target(cartesian_target, target_angle);
@@ -75,7 +96,19 @@ int main(){
         double target_to_uav_angle = std::atan2(cartesian_uav.x - cartesian_target.x, cartesian_uav.y - cartesian_target.y);
         double n_angle = bearing_angle(uav_angle, target_to_uav_angle);
 
+        cv::Point2d uav_vec = build_vector(uav_velocity, uav_angle);
+        cv::Point2d target_vec = build_vector(target_velocity, target_angle);
+        cv::Point2d at_vec = cv::Point2d(uav_vec.x - target_vec.x, uav_vec.y - target_vec.y);
+
+        if(i % 100 == 0)
+            wind_vec = wind[wind_counter++];
+        
+        cv::Point2d air_vec(uav_vec.x - wind_vec.x, uav_vec.y - wind_vec.y);
+
+        double cos_ksi = vector_dot(air_vec, at_vec) / (vector_module(air_vec) * vector_module(at_vec));
+
         double acceleration = uav_velocity * uav_velocity / r_ref + K * std::sin(n_angle);
+        acceleration = acceleration / cos_ksi;
 
         double delta_x, delta_y, delta_phi;
         update_guidance(uav_velocity, acceleration, uav_angle, delta_x, delta_y, delta_phi);
@@ -88,17 +121,15 @@ int main(){
 
         // make frame and put to video sequence
         cv::Mat frame = cv::Mat(cv::Size(img_width, img_height), CV_8UC3, cv::Scalar(255, 255, 255));
+        cv::Point2d w(wind_anchor.x + 15 * wind_vec.x, wind_anchor.y + 15 * wind_vec.y);
+        cv::arrowedLine(frame, cartesian_to_opencv(wind_anchor, img_width, img_height),
+                                  cartesian_to_opencv(w, img_width, img_height), cv::Scalar(255, 0, 255), 2);
         draw_cartesian(frame, img_width, img_height);
         cv::circle(frame, cartesian_to_opencv(cartesian_uav, img_width, img_height), 2, cv::Scalar(0, 255, 0), 2, cv::LineTypes::FILLED);
         cv::circle(frame, cartesian_to_opencv(cartesian_target, img_width, img_height), 2, cv::Scalar(0, 0, 255), 2, cv::LineTypes::FILLED);
 
         video.write(frame);
     }
-
-    cv::imshow("UAV", blank);
-    cv::waitKey(0);
-    return 0;
-
 
     return 0;
 }
